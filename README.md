@@ -115,5 +115,6 @@ The Oxocarbon palette belongs to its respective authors; used here under the sam
 
 ## Acknowledgements
 
-* [Björn Ottosson](https://bottosson.github.io/) – *Oklab* perceptual colour space.
-* [Ozwaldorf](https://github.com/ozwaldorf/lutgen-rs/tree/main) - Lutgen-RS# img-oxocarbon
+* [Björn Ottosson](https://bottosson.github.io/) – Author of Oklab perceptual colour space.
+* [Ozwaldorf](https://github.com/ozwaldorf/lutgen-rs/tree/main) - Author of lutgen-rs
+* [Caida](https://www.caida.org) - Source of sample images
