@@ -154,8 +154,11 @@ let lut_bytes = load_or_build_lut ()
 (* Fast index into the flat LUT byte buffer *)
 let[@inline] lut_index x y z = ((z * cube_side + y) * cube_side + x) * 3
 
+(* Linear interpolation helper *)
+let[@inline] lerp a b t = a +. (b -. a) *. t
+
 (* Trilinear interpolation of the LUT – allocation-free & branch-light *)
-let sample_lut r g b =
+let[@inline always] sample_lut r g b =
   (* map 0–255 → 0–cube_side-1 in float *)
   let fx = float_of_int r *. lut_scale
   and fy = float_of_int g *. lut_scale
@@ -165,7 +168,6 @@ let sample_lut r g b =
   and y1 = min (y0 + 1) (cube_side - 1)
   and z1 = min (z0 + 1) (cube_side - 1) in
   let dx = fx -. float x0 and dy = fy -. float y0 and dz = fz -. float z0 in
-  let lerp a b t = a +. (b -. a) *. t in
 
   (* Helper to fetch a colour channel as float *)
   let get idx off = float (Char.code (Bytes.unsafe_get lut_bytes (idx + off))) in
@@ -191,37 +193,48 @@ let sample_lut r g b =
 (* per-row worker *)
 let is_black r g b = r < 24 && g < 24 && b < 24
 
-let process_row out img y w =
+let process_row ~invert out img y w =
   for x = 0 to w - 1 do
     Image.read_rgba img x y @@ fun r g b _a ->
       if is_black r g b then
         Image.write_rgba out x y 0 0 0 0
       else
-        let ri,gi,bi = 255 - r, 255 - g, 255 - b in
+        let ri,gi,bi = if invert then 255 - r, 255 - g, 255 - b else r, g, b in
         let pr,pg,pb = sample_lut ri gi bi in
         Image.write_rgba out x y pr pg pb 255
   done
 
 (* batch processing *)
-let process_file pool in_dir out_dir file =
+let process_file pool ~invert in_dir out_dir file =
   if Filename.check_suffix file ".png" then (
     let src = Filename.concat in_dir file and dst = Filename.concat out_dir file in
     let img = ImageLib_unix.openfile src in
     let w,h = img.width, img.height in
     let out = Image.create_rgb ~alpha:true w h in
     T.run pool (fun () ->
-        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row out img y w));
+        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert out img y w));
     ImageLib_unix.writefile dst out;
     Printf.printf "✓ %s\n%!" file)
 
 (* entry point *)
 let () =
-  if Array.length Sys.argv <> 3 then (Printf.eprintf "Usage: %s <in_dir> <out_dir>\n" Sys.argv.(0); exit 1);
-  let in_dir, out_dir = Sys.argv.(1), Sys.argv.(2) in
-  if not (Sys.file_exists out_dir) then Unix.mkdir out_dir 0o755;
-  let pool = T.setup_pool ~num_domains:(max 1 (Domain.recommended_domain_count () - 1)) () in
-  Sys.readdir in_dir |> Array.iter (process_file pool in_dir out_dir);
-  T.teardown_pool pool
+  (* simple CLI parsing: [--invert|-i] <in_dir> <out_dir> *)
+  let invert = ref false in
+  let positional = ref [] in
+  for i = 1 to Array.length Sys.argv - 1 do
+    match Sys.argv.(i) with
+    | "--invert" | "-i" -> invert := true
+    | arg -> positional := arg :: !positional
+  done;
+  match List.rev !positional with
+  | [in_dir; out_dir] ->
+      if not (Sys.file_exists out_dir) then Unix.mkdir out_dir 0o755;
+      let pool = T.setup_pool ~num_domains:(max 1 (Domain.recommended_domain_count () - 1)) () in
+      Sys.readdir in_dir |> Array.iter (process_file pool ~invert:!invert in_dir out_dir);
+      T.teardown_pool pool
+  | _ ->
+      Printf.eprintf "Usage: %s [--invert|-i] <in_dir> <out_dir>\n" Sys.argv.(0);
+      exit 1
 
 let is_image f =
   List.exists (Filename.check_suffix f)

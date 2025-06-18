@@ -3,7 +3,7 @@
 #        out/              (results go here)
 
 OCAMLFIND   = ocamlfind
-OCAMLOPTFLG = -O3 -unsafe -thread
+OCAMLOPTFLG = -O3 -unsafe -unbox-closures -unboxed-types -vectorize -thread
 PKGS        = imagelib.unix,domainslib
 SRC         = img_oxocarbon.ml
 BIN         = img_oxocarbon
@@ -17,7 +17,7 @@ $(BIN): $(SRC)
 		-o $@ $<
 
 run: | out
-	./$(BIN) caida-original out
+	./$(BIN) --invert caida-original out
 
 out:
 	mkdir -p $@
