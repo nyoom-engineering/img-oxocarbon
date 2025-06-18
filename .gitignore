@@ -25,9 +25,6 @@ img_oxocarbon
 # Generated lookup-table cache (if built inside repo)
 oxocarbon.hald4
 
-# Image processing outputs
-out/
-
 # macOS metadata
 .DS_Store
 
