@@ -3,7 +3,7 @@
 #        out/              (results go here)
 
 OCAMLFIND   = ocamlfind
-OCAMLOPTFLG = -O3 -unsafe -unbox-closures -unboxed-types -vectorize -thread
+OCAMLOPTFLG = -O3 -unsafe -unbox-closures -unboxed-types
 PKGS        = imagelib.unix,domainslib
 SRC         = img_oxocarbon.ml
 BIN         = img_oxocarbon

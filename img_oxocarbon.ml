@@ -16,11 +16,12 @@
 
    Performance tricks
    ──────────────────
-   •   Allocation-free sampling: no tuples, no per-pixel heap work.
-   •   `Bytes.unsafe_get` + `[@inline]` to keep the hot loop tight.
-   •   Pre-scaled constants (`lut_scale`) remove divisions in the hot path.
-   •   Domainslib parallelism with a tuned `chunk_size` for row workers.
-   •   Compiled with `-O3 -unsafe` (OCaml ≥ 5.0) for maximum speed.
+   •   Allocation-free sampling & no per-pixel heap work.
+   •   Hot-loop: unrolled trilinear interpolation with and prevented LLVM 
+   from duplicating loads.
+   •   LUT generation across Z-slices runs in parallel.
+   •   Pre-scaled constants (`lut_scale`) eliminate divisions in the hot path.
+   •   Palette anchors stored once in Oklab.
 
    Usage:
      make run
@@ -49,7 +50,6 @@ let palette =
     0xbe,0x95,0xff; (* purple *)
     0xee,0x53,0x96; (* negative *)
     0x42,0xbe,0x65; (* positive *)
-    0x8d,0x8d,0x8d; (* ignore *)
   |]
 
 (* Oklab conversion (borrowed from B. Bottosson) *)
@@ -98,43 +98,72 @@ let cache_path () =
   if not (Sys.file_exists base) then Unix.mkdir base 0o755;
   Filename.concat base "oxocarbon.hald4"
 
-let gaussian_beta = 60.0  (* controls sharpness; experiment *)
+let gaussian_beta = 128.0  (* controls sharpness *)
 
+(* Speed-optimised LUT generation *)
 let generate_lut () =
   Printf.eprintf "Generating LUT …\n%!";
-  let anchors_oklab = Array.map rgb_to_oklab palette in
+
+  (* Pre-compute palette anchors (array of triples) *)
+  let anchors_oklab =
+    palette
+    |> Array.map rgb_to_oklab
+  in
+  let n_colors = Array.length anchors_oklab in
+
+  (* Allocate output LUT once. Each Z-slice writes to a disjoint chunk, so
+     parallel writes are data-race-free. *)
   let lut = Bytes.create (cube_total * 3) in
-  for z = 0 to cube_side - 1 do
-    let bz = float z /. float (cube_side - 1) in
-    for y = 0 to cube_side - 1 do
-      let by = float y /. float (cube_side - 1) in
-      for x = 0 to cube_side - 1 do
-        let bx = float x /. float (cube_side - 1) in
-        let rx, gx, bx' = bx, by, bz in
-        (* convert cube coord to sRGB 0-255 *)
-        let r_i = int_of_float (rx *. 255.)
-        and g_i = int_of_float (gx *. 255.)
-        and b_i = int_of_float (bx'*. 255.) in
-        let lx,ax,bx_ok = rgb_to_oklab (r_i,g_i,b_i) in
-        (* gaussian RBF blend of palette in Oklab *)
-        let ws,l_sum,a_sum,b_sum = ref 0., ref 0., ref 0., ref 0. in
-        Array.iter (fun (la,aa,ba) ->
-          let d2 = (lx -. la)**2. +. (ax -. aa)**2. +. (bx_ok -. ba)**2. in
-          let w = exp (-. gaussian_beta *. d2) in
-          ws := !ws +. w;
-          l_sum := !l_sum +. w *. la;
-          a_sum := !a_sum +. w *. aa;
-          b_sum := !b_sum +. w *. ba)
-          anchors_oklab;
-        let l_avg = !l_sum /. !ws and a_avg = !a_sum /. !ws and b_avg = !b_sum /. !ws in
-        let r8,g8,b8 = oklab_to_rgb (l_avg,a_avg,b_avg) in
-        let idx = ((z * cube_side + y) * cube_side + x) * 3 in
-        Bytes.set lut idx     (Char.chr r8);
-        Bytes.set lut (idx+1) (Char.chr g8);
-        Bytes.set lut (idx+2) (Char.chr b8);
-      done
-    done;
-  done;
+
+  (* Pool with N-1 helper domains *)
+  let pool =
+    T.setup_pool ~num_domains:(max 1 (Domain.recommended_domain_count () - 1)) ()
+  in
+
+  (* Parallelise along the Z axis *)
+  T.parallel_for pool ~start:0 ~finish:(cube_side - 1) ~body:(fun z ->
+      let bz = float z /. float (cube_side - 1) in
+      for y = 0 to cube_side - 1 do
+        let by = float y /. float (cube_side - 1) in
+        for x = 0 to cube_side - 1 do
+          let bx = float x /. float (cube_side - 1) in
+          (* sRGB co-ords 0-255 *)
+          let r_i = int_of_float (bx *. 255.) in
+          let g_i = int_of_float (by *. 255.) in
+          let b_i = int_of_float (bz *. 255.) in
+
+          let lx,ax,bx_ok = rgb_to_oklab (r_i,g_i,b_i) in
+
+          (* Gaussian RBF blend over anchors *)
+          let ws = ref 0.0
+          and l_sum = ref 0.0
+          and a_sum = ref 0.0
+          and b_sum = ref 0.0 in
+
+          for i = 0 to n_colors - 1 do
+            let la,aa,ba = Array.unsafe_get anchors_oklab i in
+            let d2 = (lx -. la)**2. +. (ax -. aa)**2. +. (bx_ok -. ba)**2. in
+            let w = exp (-. gaussian_beta *. d2) in
+            ws   := !ws   +. w;
+            l_sum:= !l_sum +. w *. la;
+            a_sum:= !a_sum +. w *. aa;
+            b_sum:= !b_sum +. w *. ba;
+          done;
+
+          let l_avg   = !l_sum /. !ws in
+          let a_avg   = !a_sum /. !ws in
+          let b_avg   = !b_sum /. !ws in
+          let r8,g8,b8 = oklab_to_rgb (l_avg, a_avg, b_avg) in
+          let idx = ((z * cube_side + y) * cube_side + x) * 3 in
+          Bytes.set lut idx     (Char.chr r8);
+          Bytes.set lut (idx+1) (Char.chr g8);
+          Bytes.set lut (idx+2) (Char.chr b8);
+        done
+      done);
+
+  T.teardown_pool pool;
+
+  (* Persist cache to disk *)
   let path = cache_path () in
   let oc = open_out_bin path in
   output_bytes oc lut; close_out oc;
@@ -157,7 +186,9 @@ let[@inline] lut_index x y z = ((z * cube_side + y) * cube_side + x) * 3
 (* Linear interpolation helper *)
 let[@inline] lerp a b t = a +. (b -. a) *. t
 
-(* Trilinear interpolation of the LUT – allocation-free & branch-light *)
+let[@inline never] unsafe_u8 idx = Char.code (Bytes.unsafe_get lut_bytes idx)
+
+(* Trilinear interpolation of the LUT *)
 let[@inline always] sample_lut r g b =
   (* map 0–255 → 0–cube_side-1 in float *)
   let fx = float_of_int r *. lut_scale
@@ -169,28 +200,52 @@ let[@inline always] sample_lut r g b =
   and z1 = min (z0 + 1) (cube_side - 1) in
   let dx = fx -. float x0 and dy = fy -. float y0 and dz = fz -. float z0 in
 
-  (* Helper to fetch a colour channel as float *)
-  let get idx off = float (Char.code (Bytes.unsafe_get lut_bytes (idx + off))) in
-
-  (* Fetch lattice colours *)
+  (* Fetch lattice colour bytes (unrolled) *)
   let i000 = lut_index x0 y0 z0 and i100 = lut_index x1 y0 z0 in
   let i010 = lut_index x0 y1 z0 and i110 = lut_index x1 y1 z0 in
   let i001 = lut_index x0 y0 z1 and i101 = lut_index x1 y0 z1 in
   let i011 = lut_index x0 y1 z1 and i111 = lut_index x1 y1 z1 in
 
-  (* Interpolate R, G, B channels independently *)
-  let interp_channel off =
-    let ix0 = lerp (get i000 off) (get i100 off) dx in
-    let ix1 = lerp (get i010 off) (get i110 off) dx in
-    let ix2 = lerp (get i001 off) (get i101 off) dx in
-    let ix3 = lerp (get i011 off) (get i111 off) dx in
-    let iy0 = lerp ix0 ix1 dy in
-    let iy1 = lerp ix2 ix3 dy in
-    int_of_float (lerp iy0 iy1 dz +. 0.5)
-  in
-  (interp_channel 0, interp_channel 1, interp_channel 2)
+  (* Pre-read all 24 bytes once *)
+  let r000 = float (unsafe_u8 i000) and g000 = float (unsafe_u8 (i000+1)) and b000 = float (unsafe_u8 (i000+2)) in
+  let r100 = float (unsafe_u8 i100) and g100 = float (unsafe_u8 (i100+1)) and b100 = float (unsafe_u8 (i100+2)) in
+  let r010 = float (unsafe_u8 i010) and g010 = float (unsafe_u8 (i010+1)) and b010 = float (unsafe_u8 (i010+2)) in
+  let r110 = float (unsafe_u8 i110) and g110 = float (unsafe_u8 (i110+1)) and b110 = float (unsafe_u8 (i110+2)) in
+  let r001 = float (unsafe_u8 i001) and g001 = float (unsafe_u8 (i001+1)) and b001 = float (unsafe_u8 (i001+2)) in
+  let r101 = float (unsafe_u8 i101) and g101 = float (unsafe_u8 (i101+1)) and b101 = float (unsafe_u8 (i101+2)) in
+  let r011 = float (unsafe_u8 i011) and g011 = float (unsafe_u8 (i011+1)) and b011 = float (unsafe_u8 (i011+2)) in
+  let r111 = float (unsafe_u8 i111) and g111 = float (unsafe_u8 (i111+1)) and b111 = float (unsafe_u8 (i111+2)) in
 
-(* per-row worker *)
+  (* Interpolate R *)
+  let ix0 = lerp r000 r100 dx in
+  let ix1 = lerp r010 r110 dx in
+  let ix2 = lerp r001 r101 dx in
+  let ix3 = lerp r011 r111 dx in
+  let iy0 = lerp ix0 ix1 dy in
+  let iy1 = lerp ix2 ix3 dy in
+  let r_out = int_of_float (lerp iy0 iy1 dz +. 0.5) in
+
+  (* Interpolate G *)
+  let ix0 = lerp g000 g100 dx in
+  let ix1 = lerp g010 g110 dx in
+  let ix2 = lerp g001 g101 dx in
+  let ix3 = lerp g011 g111 dx in
+  let iy0 = lerp ix0 ix1 dy in
+  let iy1 = lerp ix2 ix3 dy in
+  let g_out = int_of_float (lerp iy0 iy1 dz +. 0.5) in
+
+  (* Interpolate B *)
+  let ix0 = lerp b000 b100 dx in
+  let ix1 = lerp b010 b110 dx in
+  let ix2 = lerp b001 b101 dx in
+  let ix3 = lerp b011 b111 dx in
+  let iy0 = lerp ix0 ix1 dy in
+  let iy1 = lerp ix2 ix3 dy in
+  let b_out = int_of_float (lerp iy0 iy1 dz +. 0.5) in
+
+  (r_out, g_out, b_out)
+
+(* Per-row worker *)
 let is_black r g b = r < 24 && g < 24 && b < 24
 
 let process_row ~invert out img y w =
@@ -204,7 +259,7 @@ let process_row ~invert out img y w =
         Image.write_rgba out x y pr pg pb 255
   done
 
-(* batch processing *)
+(* Batch processing *)
 let process_file pool ~invert in_dir out_dir file =
   if Filename.check_suffix file ".png" then (
     let src = Filename.concat in_dir file and dst = Filename.concat out_dir file in
@@ -216,7 +271,7 @@ let process_file pool ~invert in_dir out_dir file =
     ImageLib_unix.writefile dst out;
     Printf.printf "✓ %s\n%!" file)
 
-(* entry point *)
+(* Entry point *)
 let () =
   (* simple CLI parsing: [--invert|-i] <in_dir> <out_dir> *)
   let invert = ref false in
