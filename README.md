@@ -5,7 +5,7 @@
 You should probably use lutgen-rs, the output is the same, but this one is fun
 
 <figure>
-  <img alt="ries-t2" width="375" src="https://github.com/user-attachments/assets/bd4a0ce6-d578-470a-a5f3-f786bd964796" />
+  <img alt="ries-t2" width="375" src="./out/ries-t2.png" />
   <figcaption>ries-t2</figcaption>
 </figure>
 
@@ -13,7 +13,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="ries-t" width="375" src="https://github.com/user-attachments/assets/17813987-63c7-437b-b5a0-96c7461c7582" />
+  <img alt="ries-t" width="375" src="./out/ries-t.png" />
   <figcaption>ries-t</figcaption>
 </figure>
 
@@ -21,7 +21,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="med-gr-l-4" width="375" src="https://github.com/user-attachments/assets/55efa7c4-f91e-4c09-9837-95610e9c13c9" />
+  <img alt="med-gr-l-4" width="375" src="./out/med-gr-l-4.png" />
   <figcaption>med-gr-l-4</figcaption>
 </figure>
 
@@ -29,7 +29,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="lar-gr-l-13" width="375" src="https://github.com/user-attachments/assets/2c79a562-e7a9-426b-87d3-ab45de4b303c" />
+  <img alt="lar-gr-l-13" width="375" src="./out/lar-gr-l-13.png" />
   <figcaption>lar-gr-l-13</figcaption>
 </figure>
 
@@ -37,7 +37,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="lar-gr-l-7" width="375" src="https://github.com/user-attachments/assets/be9f5343-4318-4f8d-94f2-94ce14400306" />
+  <img alt="lar-gr-l-7" width="375" src="./out/lar-gr-l-7.png" />
   <figcaption>lar-gr-l-7</figcaption>
 </figure>
 
@@ -45,7 +45,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="lar-gr-l-1" width="375" src="https://github.com/user-attachments/assets/a7880c3a-787f-4e27-9731-8dec5b2d6efb" />
+  <img alt="lar-gr-l-1" width="375" src="./out/lar-gr-l-1.png" />
   <figcaption>lar-gr-l-1</figcaption>
 </figure>
 
@@ -53,7 +53,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="champ2" width="375" src="https://github.com/user-attachments/assets/9eb404ac-4c1a-4d30-9ce5-105fb75e69fa" />
+  <img alt="champ2" width="375" src="./out/champ2.png" />
   <figcaption>champ2</figcaption>
 </figure>
 
@@ -61,7 +61,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 <br>
 
 <figure>
-  <img alt="a-root-rtt-05-key" width="375" src="https://github.com/user-attachments/assets/4123009f-4dd5-443f-b1f0-8e0b7d32055f" />
+  <img alt="a-root-rtt-05-key" width="375" src="./out/a-root-rtt-05-key.png" />
   <figcaption>a-root-rtt-05-key</figcaption>
 </figure>
 
