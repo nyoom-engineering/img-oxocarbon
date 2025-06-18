@@ -1,6 +1,6 @@
 # Oxocarbon Image Batch Processor
 
-> Ultra-fast, palette-accurate colour-grading for images – powered by the **Oxocarbon** palette and written in OCaml.
+> Ultra-fast, palette-accurate colour-grading for images – powered by the **Oxocarbon** palette and written in OCaml/OxCaml.
 
 You should probably use lutgen-rs, the output is the same, but this one is fun
 
@@ -78,7 +78,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 
 ### Dependencies
 
-* **OCaml ≥ 5.0**
+* [OxCaml](https://oxcaml.org/get-oxcaml/)
 * [`opam`](https://opam.ocaml.org) with the following libraries:
   * `imagelib` (`imagelib.unix` flavour)
   * `domainslib`
@@ -86,8 +86,11 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 A one-liner to obtain everything on a new switch:
 
 ```bash
-opam switch create 5.2.0  # or any ≥ 5.0 compiler
-opam install imagelib domainslib
+opam update --all
+opam switch create 5.2.0+ox --repos ox=git+https://github.com/oxcaml/opam-repository.git,default
+eval $(opam env --switch 5.2.0+ox)
+opam install -y ocamlformat merlin ocaml-lsp-server utop parallel core_unix
+opam install -y imagelib domainslib
 ```
 
 ### Run

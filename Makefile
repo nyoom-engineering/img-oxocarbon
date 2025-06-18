@@ -20,7 +20,7 @@ run: | out
 	./$(BIN) --invert --preserve --transparent caida-original out
 
 test: | out
-	./$(BIN) --preserve test-img out
+	./$(BIN) --preserve --lum-factor 0.7 test-img out
 
 out:
 	mkdir -p $@

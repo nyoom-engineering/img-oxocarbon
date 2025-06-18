@@ -18,6 +18,10 @@
    •   LUT generation across Z-slices runs in parallel.
    •   Pre-scaled constants (`lut_scale`) eliminate divisions in the hot path.
    •   Palette anchors stored once in Oklab with luminance weighting (lum_factor).
+   •   Stack-allocated `accum` record removes 4 float-ref allocations per voxel when
+       building the LUT.
+   •   Zero-copy image hand-off via the [`@unique`] binding on `out` avoids an extra
+       buffer clone when the writer domain saves the processed PNG.
 
    Usage:
      ./img_oxocarbon [--invert|-i] [--preserve|-p] [--lum-factor|-l <f>] [--transparent|-t] <in_dir> <out_dir>
@@ -47,18 +51,28 @@ let palette =
     0x42,0xbe,0x65; (* positive *)
   |]
 
-(* Oklab conversion (borrowed from B. Bottosson) *)
-let cube_root x = if x > 0. then x ** (1. /. 3.) else -.((-. x) ** (1. /. 3.))
+type lab = float * float * float
+type rgb = int * int * int
 
-let srgb_to_linear c =
+(* Stack-allocated accumulator used inside LUT generation *)
+type accum = { mutable w : float; mutable l : float; mutable a : float; mutable b : float } [@@stack]
+
+(* Oklab conversion (borrowed from B. Bottosson) *)
+let[@inline always] cube_root x =
+  if x > 0. then x ** (1. /. 3.) else -.((-. x) ** (1. /. 3.))
+
+let[@inline always] srgb_to_linear c =
   let c = c /. 255.0 in
   if c <= 0.04045 then c /. 12.92 else ((c +. 0.055) /. 1.055) ** 2.4
 
-let linear_to_srgb v =
-  let v = if v <= 0.0031308 then v *. 12.92 else 1.055 *. (v ** (1. /. 2.4)) -. 0.055 in
+let[@inline always] linear_to_srgb v =
+  let v =
+    if v <= 0.0031308 then v *. 12.92
+    else 1.055 *. (v ** (1. /. 2.4)) -. 0.055
+  in
   int_of_float (max 0.0 (min 1.0 v) *. 255.0 +. 0.5)
 
-let rgb_to_oklab (r,g,b) =
+let rgb_to_oklab (r,g,b) : lab =
   let lr_lin  = srgb_to_linear (float_of_int r)
   and lg_lin  = srgb_to_linear (float_of_int g)
   and lb_lin  = srgb_to_linear (float_of_int b) in
@@ -71,7 +85,7 @@ let rgb_to_oklab (r,g,b) =
   and b_ = 0.0259040371 *. l' +. 0.7827717662 *. m' -. 0.8086757660 *. s' in
   (l_,a_,b_)
 
-let oklab_to_rgb (l_,a_,b_) =
+let oklab_to_rgb (l_,a_,b_) : rgb =
   let l' = l_ +. 0.3963377774 *. a_ +. 0.2158037573 *. b_ in
   let m' = l_ -. 0.1055613458 *. a_ -. 0.0638541728 *. b_ in
   let s' = l_ -. 0.0894841775 *. a_ -. 1.2914855480 *. b_ in
@@ -139,6 +153,8 @@ let generate_lut () =
       let bz = float z *. inv_cube in
       for y = 0 to cube_side - 1 do
         let by = float y *. inv_cube in
+        (* Stack-allocated accumulator reused for every voxel in the row *)
+        let acc : accum = { w = 0.; l = 0.; a = 0.; b = 0. } [@stack] in
         for x = 0 to cube_side - 1 do
           let bx = float x *. inv_cube in
           (* sRGB co-ords 0-255 *)
@@ -149,25 +165,22 @@ let generate_lut () =
           let lx0,ax,bx_ok = rgb_to_oklab (r_i,g_i,b_i) in
           let lx = lx0 *. lum_factor in
 
-          (* Gaussian RBF blend over anchors *)
-          let ws = ref 0.0
-          and l_sum = ref 0.0
-          and a_sum = ref 0.0
-          and b_sum = ref 0.0 in
+          (* Reset accumulator *)
+          acc.w <- 0.; acc.l <- 0.; acc.a <- 0.; acc.b <- 0.;
 
           for i = 0 to n_colors - 1 do
             let la,aa,ba = Array.unsafe_get anchors_oklab i in
             let d2 = (lx -. la)**2. +. (ax -. aa)**2. +. (bx_ok -. ba)**2. in
             let w = exp (-. gaussian_beta *. d2) in
-            ws   := !ws   +. w;
-            l_sum:= !l_sum +. w *. la;
-            a_sum:= !a_sum +. w *. aa;
-            b_sum:= !b_sum +. w *. ba;
+            acc.w <- acc.w +. w;
+            acc.l <- acc.l +. w *. la;
+            acc.a <- acc.a +. w *. aa;
+            acc.b <- acc.b +. w *. ba;
           done;
 
-          let l_avg_scaled = !l_sum /. !ws in
-          let a_avg   = !a_sum /. !ws in
-          let b_avg   = !b_sum /. !ws in
+          let l_avg_scaled = acc.l /. acc.w in
+          let a_avg   = acc.a /. acc.w in
+          let b_avg   = acc.b /. acc.w in
           let l_avg = l_avg_scaled /. lum_factor in
           let r8,g8,b8 = oklab_to_rgb (l_avg, a_avg, b_avg) in
           let idx = ((z * cube_side + y) * cube_side + x) * 3 in
@@ -175,7 +188,9 @@ let generate_lut () =
           Bytes.unsafe_set lut (idx+1) (Char.unsafe_chr g8);
           Bytes.unsafe_set lut (idx+2) (Char.unsafe_chr b8);
         done
-      done));
+      done
+    )
+  );
 
   T.teardown_pool pool;
 
@@ -191,7 +206,10 @@ let load_or_build_lut () =
     let ic = open_in_bin path in
     let sz = in_channel_length ic in
     if sz <> cube_total * 3 then (close_in ic; generate_lut ())
-    else let bytes = really_input_string ic sz in close_in ic; Bytes.of_string bytes)
+    else (
+      let bytes = really_input_string ic sz in
+      close_in ic;
+      Bytes.of_string bytes ))
   else generate_lut ()
 
 let lut_bytes = load_or_build_lut ()
@@ -205,7 +223,7 @@ let[@inline] lerp a b t = a +. (b -. a) *. t
 let[@inline never] unsafe_u8 idx = Char.code (Bytes.unsafe_get lut_bytes idx)
 
 (* Trilinear interpolation of the LUT *)
-let[@inline always] sample_lut r g b =
+let[@inline always] sample_lut (r:int) (g:int) (b:int) : rgb =
   (* map 0–255 → 0–cube_side-1 in float *)
   let fx = float_of_int r *. lut_scale
   and fy = float_of_int g *. lut_scale
@@ -291,9 +309,10 @@ let process_file pool ~invert ~preserve ~transparent in_dir out_dir file =
     let src = Filename.concat in_dir file and dst = Filename.concat out_dir file in
     let img = ImageLib_unix.openfile src in
     let w,h = img.width, img.height in
-    let out = Image.create_rgb ~alpha:true w h in
+    let out [@unique] = Image.create_rgb ~alpha:true w h in
     T.run pool (fun () ->
-        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert ~preserve ~transparent out img y w));
+        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert ~preserve ~transparent out img y w)
+    );
     ImageLib_unix.writefile dst out;
     Printf.printf "✓ %s\n%!" file)
 
