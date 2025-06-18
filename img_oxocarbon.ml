@@ -21,7 +21,8 @@
    from duplicating loads.
    •   LUT generation across Z-slices runs in parallel.
    •   Pre-scaled constants (`lut_scale`) eliminate divisions in the hot path.
-   •   Palette anchors stored once in Oklab.
+   •   Palette anchors stored once in Oklab with luminance weighting (lum_factor, default 0.7).
+   •   Cache filename encodes β and lum_factor, so changing params regenerates fast.
 
    Usage:
      make run
@@ -86,28 +87,39 @@ let oklab_to_rgb (l_,a_,b_) =
   let lb =  0.0415550574 *. l3 -. 0.5369569129 *. m3 +. 1.4952948517 *. s3 in
   ( linear_to_srgb lr, linear_to_srgb lg, linear_to_srgb lb )
 
-(* LUT generation (Gaussian RBF) *)
-let cube_side = 64        (* HALD-4: 64 × 64 × 64 *)
-let cube_total = cube_side * cube_side * cube_side
-let cube_side_f = float cube_side
-let lut_scale = (cube_side_f -. 1.) /. 255.0
+(* LUT dimensions and derived constants *)
+let cube_side   = 64                                  (* 64³ Hald-4 *)
+let cube_total  = cube_side * cube_side * cube_side
+let inv_cube    = 1.0 /. float (cube_side - 1)         (* 1/(side-1)  *)
+let lut_scale   = (float cube_side -. 1.) /. 255.0     (* 0-255 → 0-side-1 *)
+let srgb_scale  = 255.0
+
+let gaussian_beta = 128.0  (* controls sharpness *)
+
+(* Luminance weighting – values < 1 boost saturation by de-emphasising L in distance calc. *)
+let lum_factor =
+  match Sys.getenv_opt "OXO_LUM_FACTOR" with
+  | Some v -> (try float_of_string v with _ -> 0.7)
+  | None -> 0.7
 
 let cache_path () =
   let base = match Sys.getenv_opt "XDG_CACHE_HOME" with
     | Some d -> d | None -> Filename.concat (Sys.getenv "HOME") ".cache" in
   if not (Sys.file_exists base) then Unix.mkdir base 0o755;
-  Filename.concat base "oxocarbon.hald4"
-
-let gaussian_beta = 128.0  (* controls sharpness *)
+  let fname = Printf.sprintf "oxocarbon-b%d-l%02d.hald4"
+      (int_of_float gaussian_beta)
+      (int_of_float (lum_factor *. 100.)) in
+  Filename.concat base fname
 
 (* Speed-optimised LUT generation *)
 let generate_lut () =
   Printf.eprintf "Generating LUT …\n%!";
 
-  (* Pre-compute palette anchors (array of triples) *)
+  (* Pre-compute palette anchors (array of triples), applying lum_factor to L *)
   let anchors_oklab =
     palette
     |> Array.map rgb_to_oklab
+    |> Array.map (fun (l,a,b) -> (l *. lum_factor, a, b))
   in
   let n_colors = Array.length anchors_oklab in
 
@@ -121,18 +133,20 @@ let generate_lut () =
   in
 
   (* Parallelise along the Z axis *)
-  T.parallel_for pool ~start:0 ~finish:(cube_side - 1) ~body:(fun z ->
-      let bz = float z /. float (cube_side - 1) in
+  T.run pool (fun () ->
+    T.parallel_for pool ~start:0 ~finish:(cube_side - 1) ~body:(fun z ->
+      let bz = float z *. inv_cube in
       for y = 0 to cube_side - 1 do
-        let by = float y /. float (cube_side - 1) in
+        let by = float y *. inv_cube in
         for x = 0 to cube_side - 1 do
-          let bx = float x /. float (cube_side - 1) in
+          let bx = float x *. inv_cube in
           (* sRGB co-ords 0-255 *)
-          let r_i = int_of_float (bx *. 255.) in
-          let g_i = int_of_float (by *. 255.) in
-          let b_i = int_of_float (bz *. 255.) in
+          let r_i = int_of_float (bx *. srgb_scale) in
+          let g_i = int_of_float (by *. srgb_scale) in
+          let b_i = int_of_float (bz *. srgb_scale) in
 
-          let lx,ax,bx_ok = rgb_to_oklab (r_i,g_i,b_i) in
+          let lx0,ax,bx_ok = rgb_to_oklab (r_i,g_i,b_i) in
+          let lx = lx0 *. lum_factor in
 
           (* Gaussian RBF blend over anchors *)
           let ws = ref 0.0
@@ -150,16 +164,17 @@ let generate_lut () =
             b_sum:= !b_sum +. w *. ba;
           done;
 
-          let l_avg   = !l_sum /. !ws in
+          let l_avg_scaled = !l_sum /. !ws in
           let a_avg   = !a_sum /. !ws in
           let b_avg   = !b_sum /. !ws in
+          let l_avg = l_avg_scaled /. lum_factor in
           let r8,g8,b8 = oklab_to_rgb (l_avg, a_avg, b_avg) in
           let idx = ((z * cube_side + y) * cube_side + x) * 3 in
           Bytes.set lut idx     (Char.chr r8);
           Bytes.set lut (idx+1) (Char.chr g8);
           Bytes.set lut (idx+2) (Char.chr b8);
         done
-      done);
+      done));
 
   T.teardown_pool pool;
 
