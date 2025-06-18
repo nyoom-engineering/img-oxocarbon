@@ -1,0 +1,37 @@
+# OCaml build artefacts
+*.cm?
+*.o
+*.a
+*.annot
+*.cmt
+*.cmti
+*.cmi
+*.cmo
+*.cmx
+*.cmxa
+*.exe
+*.native
+*.byte
+
+# opam switch-specific files
+_opam/
+
+# Dune (if ever used)
+_build/
+
+# Compiled binaries
+img_oxocarbon
+
+# Generated lookup-table cache (if built inside repo)
+oxocarbon.hald4
+
+# Image processing outputs
+out/
+
+# macOS metadata
+.DS_Store
+
+# VSCode settings and misc editor files
+.vscode/
+*.swp
+*.swo 
