@@ -70,9 +70,8 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 
 ## Features
 
-* One-time LUT build – A dense 64³ HALD‐4 lookup-table is generated once using Gaussian-RBF interpolation in Oklab space and cached.
+* One-time LUT build – A dense HALD‐4 lookup-table is generated once using Gaussian-RBF interpolation in Oklab space and cached.
 * Blazing-fast processing – Allocation-free, inlined trilinear filtering & parallelism chew through whole folders of PNGs in seconds.
-* Zero dependencies at runtime – The tool outputs standard 32-bit PNG files; no external libraries needed once built.
 
 ## Installation
 

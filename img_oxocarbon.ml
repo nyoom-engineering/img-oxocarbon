@@ -99,8 +99,8 @@ let gaussian_beta = 128.0  (* controls sharpness *)
 (* Luminance weighting – values < 1 boost saturation by de-emphasising L in distance calc. *)
 let lum_factor =
   match Sys.getenv_opt "OXO_LUM_FACTOR" with
-  | Some v -> (try float_of_string v with _ -> 0.7)
-  | None -> 0.7
+  | Some v -> (try float_of_string v with _ -> 1.0)
+  | None -> 1.0
 
 let cache_path () =
   let base = match Sys.getenv_opt "XDG_CACHE_HOME" with
@@ -170,9 +170,9 @@ let generate_lut () =
           let l_avg = l_avg_scaled /. lum_factor in
           let r8,g8,b8 = oklab_to_rgb (l_avg, a_avg, b_avg) in
           let idx = ((z * cube_side + y) * cube_side + x) * 3 in
-          Bytes.set lut idx     (Char.chr r8);
-          Bytes.set lut (idx+1) (Char.chr g8);
-          Bytes.set lut (idx+2) (Char.chr b8);
+          Bytes.unsafe_set lut idx     (Char.unsafe_chr r8);
+          Bytes.unsafe_set lut (idx+1) (Char.unsafe_chr g8);
+          Bytes.unsafe_set lut (idx+2) (Char.unsafe_chr b8);
         done
       done));
 
@@ -263,7 +263,7 @@ let[@inline always] sample_lut r g b =
 (* Per-row worker *)
 let is_black r g b = r < 24 && g < 24 && b < 24
 
-let process_row ~invert out img y w =
+let process_row ~invert ~preserve out img y w =
   for x = 0 to w - 1 do
     Image.read_rgba img x y @@ fun r g b _a ->
       if is_black r g b then
@@ -271,39 +271,50 @@ let process_row ~invert out img y w =
       else
         let ri,gi,bi = if invert then 255 - r, 255 - g, 255 - b else r, g, b in
         let pr,pg,pb = sample_lut ri gi bi in
+
+        (* Optionally preserve original luminance (Oklab L component) *)
+        let pr,pg,pb =
+          if preserve then
+            let l0,_,_ = rgb_to_oklab (ri,gi,bi) in
+            let _l1,a1,b1 = rgb_to_oklab (pr,pg,pb) in
+            oklab_to_rgb (l0,a1,b1)
+          else (pr,pg,pb)
+        in
         Image.write_rgba out x y pr pg pb 255
   done
 
 (* Batch processing *)
-let process_file pool ~invert in_dir out_dir file =
+let process_file pool ~invert ~preserve in_dir out_dir file =
   if Filename.check_suffix file ".png" then (
     let src = Filename.concat in_dir file and dst = Filename.concat out_dir file in
     let img = ImageLib_unix.openfile src in
     let w,h = img.width, img.height in
     let out = Image.create_rgb ~alpha:true w h in
     T.run pool (fun () ->
-        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert out img y w));
+        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert ~preserve out img y w));
     ImageLib_unix.writefile dst out;
     Printf.printf "✓ %s\n%!" file)
 
 (* Entry point *)
 let () =
-  (* simple CLI parsing: [--invert|-i] <in_dir> <out_dir> *)
+  (* simple CLI parsing: [--invert|-i] [--preserve|-p] <in_dir> <out_dir> *)
   let invert = ref false in
+  let preserve = ref false in
   let positional = ref [] in
   for i = 1 to Array.length Sys.argv - 1 do
     match Sys.argv.(i) with
     | "--invert" | "-i" -> invert := true
+    | "--preserve" | "-p" -> preserve := true
     | arg -> positional := arg :: !positional
   done;
   match List.rev !positional with
   | [in_dir; out_dir] ->
       if not (Sys.file_exists out_dir) then Unix.mkdir out_dir 0o755;
       let pool = T.setup_pool ~num_domains:(max 1 (Domain.recommended_domain_count () - 1)) () in
-      Sys.readdir in_dir |> Array.iter (process_file pool ~invert:!invert in_dir out_dir);
+      Sys.readdir in_dir |> Array.iter (process_file pool ~invert:!invert ~preserve:!preserve in_dir out_dir);
       T.teardown_pool pool
   | _ ->
-      Printf.eprintf "Usage: %s [--invert|-i] <in_dir> <out_dir>\n" Sys.argv.(0);
+      Printf.eprintf "Usage: %s [--invert|-i] [--preserve|-p] <in_dir> <out_dir>\n" Sys.argv.(0);
       exit 1
 
 let is_image f =

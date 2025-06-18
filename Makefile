@@ -17,7 +17,7 @@ $(BIN): $(SRC)
 		-o $@ $<
 
 run: | out
-	./$(BIN) --invert caida-original out
+	./$(BIN) --invert --preserve caida-original out
 
 out:
 	mkdir -p $@
