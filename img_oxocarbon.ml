@@ -9,10 +9,6 @@
          "$XDG_CACHE_HOME/oxocarbon.hald4"  (falls back to  ~/.cache/).
 
    2.  Subsequent runs load the cached LUT and process all PNGs in parallel:
-       • pixel is inverted to match the dark-to-light aesthetic;            
-       • near-black pixels become transparent;                              
-       • all others are mapped through allocation-free, inlined trilinear
-         filtering of the LUT.
 
    Performance tricks
    ──────────────────
@@ -22,7 +18,6 @@
    •   LUT generation across Z-slices runs in parallel.
    •   Pre-scaled constants (`lut_scale`) eliminate divisions in the hot path.
    •   Palette anchors stored once in Oklab with luminance weighting (lum_factor, default 0.7).
-   •   Cache filename encodes β and lum_factor, so changing params regenerates fast.
 
    Usage:
      make run

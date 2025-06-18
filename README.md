@@ -72,6 +72,7 @@ You should probably use lutgen-rs, the output is the same, but this one is fun
 
 * One-time LUT build – A dense HALD‐4 lookup-table is generated once using Gaussian-RBF interpolation in Oklab space and cached.
 * Blazing-fast processing – Allocation-free, inlined trilinear filtering & parallelism chew through whole folders of PNGs in seconds.
+* Optional luminance weighting and preserve
 
 ## Installation
 
@@ -104,7 +105,7 @@ ocamlfind ocamlopt -O3 -thread -unsafe \
 ./img_oxocarbon <input_dir> <output_dir>
 ```
 
-Processing is embarrassingly parallel: by default the program launches `n-1` domains (where *n* = logical cores) and splits work in 16-row chunks.
+Optionally use `--invert` to invert the input image, `--preserve` to preserve luminance, and set `OXO_LUM_FACTOR` to adjust luminance
 
 ## License
 
