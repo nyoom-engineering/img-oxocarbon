@@ -17,11 +17,10 @@
    from duplicating loads.
    •   LUT generation across Z-slices runs in parallel.
    •   Pre-scaled constants (`lut_scale`) eliminate divisions in the hot path.
-   •   Palette anchors stored once in Oklab with luminance weighting (lum_factor, default 0.7).
+   •   Palette anchors stored once in Oklab with luminance weighting (lum_factor).
 
    Usage:
-     make run
-     ./img_oxocarbon <in_dir> <out_dir>
+     ./img_oxocarbon [--invert|-i] [--preserve|-p] [--lum-factor|-l <f>] [--transparent|-t] <in_dir> <out_dir>
    -------------------------------------------------------------------------*)
 
 open Image
@@ -93,7 +92,14 @@ let gaussian_beta = 128.0  (* controls sharpness *)
 
 (* Luminance weighting – values < 1 boost saturation by de-emphasising L in distance calc. *)
 let lum_factor =
-  match Sys.getenv_opt "OXO_LUM_FACTOR" with
+  let rec find i =
+    if i >= Array.length Sys.argv then None
+    else match Sys.argv.(i) with
+      | "--lum-factor" | "-l" ->
+          if i + 1 < Array.length Sys.argv then Some Sys.argv.(i+1) else None
+      | _ -> find (i + 1)
+  in
+  match find 1 with
   | Some v -> (try float_of_string v with _ -> 1.0)
   | None -> 1.0
 
@@ -258,10 +264,11 @@ let[@inline always] sample_lut r g b =
 (* Per-row worker *)
 let is_black r g b = r < 24 && g < 24 && b < 24
 
-let process_row ~invert ~preserve out img y w =
+let process_row ~invert ~preserve ~transparent out img y w =
   for x = 0 to w - 1 do
     Image.read_rgba img x y @@ fun r g b _a ->
-      if is_black r g b then
+      let make_transparent = transparent && is_black r g b in
+      if make_transparent then
         Image.write_rgba out x y 0 0 0 0
       else
         let ri,gi,bi = if invert then 255 - r, 255 - g, 255 - b else r, g, b in
@@ -279,37 +286,42 @@ let process_row ~invert ~preserve out img y w =
   done
 
 (* Batch processing *)
-let process_file pool ~invert ~preserve in_dir out_dir file =
+let process_file pool ~invert ~preserve ~transparent in_dir out_dir file =
   if Filename.check_suffix file ".png" then (
     let src = Filename.concat in_dir file and dst = Filename.concat out_dir file in
     let img = ImageLib_unix.openfile src in
     let w,h = img.width, img.height in
     let out = Image.create_rgb ~alpha:true w h in
     T.run pool (fun () ->
-        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert ~preserve out img y w));
+        T.parallel_for pool ~start:0 ~finish:(h-1) ~chunk_size:16 ~body:(fun y -> process_row ~invert ~preserve ~transparent out img y w));
     ImageLib_unix.writefile dst out;
     Printf.printf "✓ %s\n%!" file)
 
 (* Entry point *)
 let () =
-  (* simple CLI parsing: [--invert|-i] [--preserve|-p] <in_dir> <out_dir> *)
-  let invert = ref false in
-  let preserve = ref false in
-  let positional = ref [] in
-  for i = 1 to Array.length Sys.argv - 1 do
-    match Sys.argv.(i) with
-    | "--invert" | "-i" -> invert := true
-    | "--preserve" | "-p" -> preserve := true
-    | arg -> positional := arg :: !positional
+  (* CLI: [--invert|-i] [--preserve|-p] [--lum-factor|-l <f>] [--transparent|-t] <in_dir> <out_dir> *)
+  let invert       = ref false in
+  let preserve     = ref false in
+  let transparent  = ref false in
+  let positional   = ref [] in
+  let i = ref 1 in
+  while !i < Array.length Sys.argv do
+    (match Sys.argv.(!i) with
+     | "--invert" | "-i" -> invert := true; incr i
+     | "--preserve" | "-p" -> preserve := true; incr i
+     | "--transparent" | "-t" -> transparent := true; incr i
+     | "--lum-factor" | "-l" ->
+         if !i + 1 < Array.length Sys.argv then i := !i + 2 else i := !i + 1
+     | arg -> positional := arg :: !positional; incr i)
   done;
   match List.rev !positional with
   | [in_dir; out_dir] ->
       if not (Sys.file_exists out_dir) then Unix.mkdir out_dir 0o755;
       let pool = T.setup_pool ~num_domains:(max 1 (Domain.recommended_domain_count () - 1)) () in
-      Sys.readdir in_dir |> Array.iter (process_file pool ~invert:!invert ~preserve:!preserve in_dir out_dir);
+      Sys.readdir in_dir |> Array.iter (process_file pool ~invert:!invert ~preserve:!preserve ~transparent:!transparent in_dir out_dir);
       T.teardown_pool pool
   | _ ->
-      Printf.eprintf "Usage: %s [--invert|-i] [--preserve|-p] <in_dir> <out_dir>\n" Sys.argv.(0);
+      Printf.eprintf "Usage: %s [--invert|-i] [--preserve|-p] [--transparent|-t] [--lum-factor|-l <f>] <in_dir> <out_dir>\n" Sys.argv.(0);
       exit 1
 
 let is_image f =

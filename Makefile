@@ -8,16 +8,19 @@ PKGS        = imagelib.unix,domainslib
 SRC         = img_oxocarbon.ml
 BIN         = img_oxocarbon
 
-.PHONY: all run clean
+.PHONY: all run test clean
 
-all: $(BIN) run
+all: $(BIN) run test
 
 $(BIN): $(SRC)
 	$(OCAMLFIND) ocamlopt $(OCAMLOPTFLG) -package $(PKGS) -linkpkg \
 		-o $@ $<
 
 run: | out
-	./$(BIN) --invert --preserve caida-original out
+	./$(BIN) --invert --preserve --transparent caida-original out
+
+test: | out
+	./$(BIN) --preserve test-img out
 
 out:
 	mkdir -p $@
